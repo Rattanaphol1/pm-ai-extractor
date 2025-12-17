@@ -1,51 +1,84 @@
 'use server';
 
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { IPMData } from './types';
 
-// แนะนำให้ใช้ ENV Variable: process.env.GEMINI_API_KEY
-const API_KEY = "AIzaSyC-7-eueFXqW0fxsNVXrxOP0FxoyB2BZzo";
-const genAI = new GoogleGenerativeAI(API_KEY);
+// ใช้ API Key จาก Groq Cloud
+const groq = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY!,
+  baseURL: "https://api.groq.com/openai/v1",
+});
 
-export async function extractDataFromText(csvContent: string): Promise<IPMData[]> {
+export async function extractDataFromAI(payload: string, mode: 'text' | 'image'): Promise<IPMData[]> {
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: {
+    if (mode === 'text') {
+      // --- สำหรับไฟล์ CSV / Excel ใช้ Llama 3.3 70B (ตัวท็อปด้านข้อความ) ---
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "system",
+            content: "Extract PM data from CSV and return ONLY a JSON Array with fields: machineCode, machineName, maintenanceDescription, frequency. Use raw frequency values."
+          },
+          { role: "user", content: payload }
+        ],
+        response_format: { type: "json_object" },
         temperature: 0.1,
-        responseMimeType: "application/json",
-      }
-    });
+      });
 
-    const prompt = `
-      Extract PM (Preventive Maintenance) data from this CSV.
-      Rules:
-      1. Field mapping: machineCode, machineName, maintenanceDescription, frequency
-      2. Keep Thai names for machineName (DO NOT TRANSLATE).
-      3. Fill empty machineCode/Name from the row above.
-      4. Standardize Frequency: '1 M'->'Monthly', '2 W'->'Bi-Weekly', '3 M'->'Quarterly', '6 M'->'Semi-Annually', '1 Y'->'Annually'.
-      
-      CSV Data:
-      ${csvContent}
+      const result = JSON.parse(completion.choices[0].message.content || "{}");
+      const items = Array.isArray(result) ? result : (Object.values(result)[0] as any[]);
 
-      Return JSON array of objects.
-    `;
+      return items.map((item: any, idx: number) => ({
+        id: `groq-text-${Date.now()}-${idx}`,
+        machineCode: String(item.machineCode || "").trim(),
+        machineName: String(item.machineName || "").trim(),
+        frequency: String(item.frequency || "").trim(),
+        maintenanceDescription: String(item.maintenanceDescription || "").trim()
+      }));
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const parsed = JSON.parse(text);
+    } else {
+      // --- สำหรับรูปภาพ ใช้ Llama 3.2 90B Vision (ตัวปัจจุบันที่อ่านรูปเก่งที่สุดของ Groq) ---
+      // ใน actions.ts ส่วนของ mode === 'image'
+      const completion = await groq.chat.completions.create({
+        model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `You are a data extraction expert. 
+          1. Extract EVERY SINGLE ROW found in the image table. Do not skip any items.
+          2. Capture both THAI and ENGLISH text exactly as shown (e.g., "Filling 1 (1 Kg.) เครื่องบรรจุนมกระป๋อง 1").
+          3. Return the result as a JSON Array named 'data'.
+          Fields: machineCode, machineName, maintenanceDescription, frequency.`
+              },
+              {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${payload}` },
+              },
+            ],
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0, // ปรับเป็น 0 เพื่อให้ AI มีความแม่นยำสูงสุด ไม่เดาข้อมูล
+      });
 
-    // ปรับโครงสร้างข้อมูลให้ตรงกับ Interface
-    return parsed.map((item: any, idx: number) => ({
-      id: `pm-${Date.now()}-${idx}`,
-      machineCode: String(item.machineCode || "").trim(),
-      machineName: String(item.machineName || "").trim(),
-      frequency: item.frequency || "Unknown",
-      maintenanceDescription: String(item.maintenanceDescription || "").trim()
-    }));
+      const result = JSON.parse(completion.choices[0].message.content || "{}");
+      // ตรวจสอบว่า AI ส่งกลับมาเป็น Object ที่หุ้ม Array หรือเป็น Array โดยตรง
+      const items = Array.isArray(result) ? result : (result.data || result.items || Object.values(result)[0] || []);
 
+      return items.map((item: any, idx: number) => ({
+        id: `groq-vision-${Date.now()}-${idx}`,
+        machineCode: String(item.machineCode || "").trim(),
+        machineName: String(item.machineName || "").trim(),
+        frequency: String(item.frequency || "").trim(),
+        maintenanceDescription: String(item.maintenanceDescription || "").trim()
+      }));
+    }
   } catch (error: any) {
-    console.error("🔥 AI Error:", error);
-    throw new Error(`AI Processing Failed: ${error.message}`);
+    console.error("Groq Engine Error:", error);
+    throw new Error(`ระบบ Groq ขัดข้อง: ${error.message}`);
   }
 }
