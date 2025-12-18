@@ -1,20 +1,50 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { IPMData } from './types';
 import {
   Loader2, Cpu, Activity, Database, LayoutGrid,
-  FileText, Clock, ImageIcon, AlertCircle, CheckCircle2
+  FileText, Clock, ImageIcon, AlertCircle, CheckCircle2,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { extractDataFromAI } from './actions';
+import { Search, X } from 'lucide-react';
 
 export default function Home() {
   const [data, setData] = useState<IPMData[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const accuracyRate = useMemo(() => {
+    if (data.length === 0) return 0;
+    const totalFields = data.length * 4;
+    let filledFields = 0;
+
+    data.forEach(item => {
+      if (item.machineCode?.trim()) filledFields++;
+      if (item.machineName?.trim()) filledFields++;
+      if (item.maintenanceDescription?.trim()) filledFields++;
+      if (item.frequency?.trim()) filledFields++;
+    });
+
+    return Math.round((filledFields / totalFields) * 100);
+  }, [data]);
+
+  const filteredData = useMemo(() => {
+    return data.filter((item) => {
+      const searchStr = searchTerm.toLowerCase();
+      return (
+        item.machineCode.toLowerCase().includes(searchStr) ||
+        item.machineName.toLowerCase().includes(searchStr) ||
+        item.maintenanceDescription?.toLowerCase().includes(searchStr)
+      );
+    });
+  }, [data, searchTerm]);
 
   const processData = async (payload: string, mode: 'text' | 'image') => {
     setLoading(true);
@@ -50,7 +80,7 @@ export default function Home() {
     else if (fileName.endsWith('.csv')) {
       Papa.parse(file, {
         complete: (res) => {
-          const csvString = Papa.unparse(res.data.slice(0, 200));
+          const csvString = Papa.unparse(res.data.slice(0, 300));
           processData(csvString, 'text');
         },
         header: false,
@@ -65,13 +95,51 @@ export default function Home() {
         const wb = XLSX.read(bstr, { type: 'binary' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        const csvString = Papa.unparse((rawRows as any[]).slice(0, 200));
+        const csvString = Papa.unparse((rawRows as any[]).slice(0, 100));
         processData(csvString, 'text');
       };
       reader.readAsBinaryString(file);
     }
   };
 
+
+  const getFieldError = (value: string, fieldName: string) => {
+    if (!value || value.trim() === "") return "กรุณาตรวจสอบข้อมูล";
+
+    // ตัวอย่าง: ถ้ารหัสเครื่องจักร (machineCode) สั้นเกินไปหรือไม่มีตัวเลข
+    if (fieldName === "machineCode" && value.length < 3) return "รหัสเครื่องสั้นผิดปกติ";
+
+    // ตัวอย่าง: ถ้าความถี่ (frequency) ไม่มีหน่วยเดือน/ปี หรือเลข
+    if (fieldName === "frequency" && !/[0-9]/.test(value)) return "ระบุความถี่ไม่ชัดเจน";
+
+    return null;
+  };
+
+  const addRow = (index: number) => {
+    const newData = [...data];
+    const newRow: IPMData = {
+      id: `manual-${Date.now()}`,
+      machineCode: '',
+      machineName: '',
+      maintenanceDescription: '',
+      frequency: ''
+    };
+    newData.splice(index + 1, 0, newRow);
+    setData(newData);
+  };
+
+  // ฟังก์ชันสำหรับลบแถว
+  const deleteRow = (id: string) => {
+    const newData = data.filter(item => item.id !== id);
+    setData(newData);
+  };
+
+  // ฟังก์ชันสำหรับอัปเดตข้อมูลเมื่อมีการพิมพ์ในช่อง (เพื่อให้ข้อมูลใน State เป็นปัจจุบัน)
+  const updateField = (index: number, field: keyof IPMData, value: string) => {
+    const newData = [...data];
+    newData[index] = { ...newData[index], [field]: value };
+    setData(newData);
+  };
 
   return (
     <main className="min-h-screen bg-[#FDFDFD] p-6 lg:p-10 font-sans text-slate-800">
@@ -128,6 +196,23 @@ export default function Home() {
               <span className="text-2xl font-black text-blue-600">{data.length}</span>
             </div>
 
+            {data.length > 0 && (
+              <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm ">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-400">Accuracy Rate</span>
+                  <span className={`text-xs font-black ${accuracyRate > 90 ? 'text-green-500' : 'text-orange-500'}`}>
+                    {accuracyRate}%
+                  </span>
+                </div>
+                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-1000 ${accuracyRate > 90 ? 'bg-green-500' : 'bg-orange-500'}`}
+                    style={{ width: `${accuracyRate}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
             {errorMsg && (
               <div className="p-4 bg-red-50 border border-red-100 text-red-700 rounded-2xl flex items-center gap-3">
                 <AlertCircle size={20} />
@@ -138,6 +223,30 @@ export default function Home() {
 
           {/* Right Column */}
           <div className="lg:col-span-8">
+
+            {data.length > 0 && (
+              <div className="bg-white rounded-3xl mb-4 border border-slate-200 p-6 shadow-sm">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="ค้นหารหัส, ชื่อ หรือรายการ..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {loading ? (
               <div className="bg-white rounded-[2.5rem] border border-slate-200 py-32 flex flex-col items-center">
                 <Loader2 className="animate-spin text-blue-600 mb-4" size={48} />
@@ -153,31 +262,94 @@ export default function Home() {
                     <table className="w-full text-sm text-left border-collapse">
                       <thead className="bg-blue-700 text-white font-bold uppercase text-[12px] tracking-widest sticky top-0 z-10 shadow-sm">
                         <tr>
+                          <th className="p-4 bg-blue-700 w-16 text-center">ลำดับ</th>
                           <th className="p-4 bg-blue-700">รหัสเครื่องจักร</th>
                           <th className="p-4 bg-blue-700">ชื่อเครื่องจักร</th>
+                          <th className="p-4 bg-blue-700">รายการบำรุงรักษา</th>
                           <th className="p-4 bg-blue-700">ความถี่</th>
+                          <th className="p-4 bg-blue-700 text-center w-24">จัดการ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {data.map((row, index) => (
+                        {filteredData.map((row, index) => (
                           <tr key={row.id || `row-${index}`} className="hover:bg-blue-50/50 transition-colors">
+                            <td className="p-3 text-center font-bold text-slate-400 text-xs">
+                              {index + 1}
+                            </td>
                             <td className="p-3">
-                              <input
-                                defaultValue={row.machineCode}
-                                className="w-full p-2 border border-slate-100 rounded bg-transparent font-mono font-bold text-blue-600 outline-none focus:ring-1 focus:ring-blue-500"
-                              />
+                              <div className="flex flex-col gap-1">
+                                <input
+                                  defaultValue={row.machineCode}
+                                  onChange={(e) => updateField(index, 'machineCode', e.target.value)}
+                                  className={`w-full p-2 border rounded font-mono font-bold outline-none transition-all ${getFieldError(row.machineCode, "machineCode")
+                                    ? "border-yellow-400 bg-red-50 text-yellow-600"
+                                    : "border-slate-100 bg-transparent text-blue-600 focus:ring-1 focus:ring-blue-500"
+                                    }`}
+                                />
+                                {getFieldError(row.machineCode, "machineCode") && (
+                                  <span className="text-[11px] text-yellow-500 font-bold ml-1 animate-pulse">
+                                    {getFieldError(row.machineCode, "machineCode")}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="p-3">
                               <input
                                 defaultValue={row.machineName}
+                                onChange={(e) => updateField(index, 'machineName', e.target.value)}
+                                className={`w-full p-2 border rounded font-medium outline-none transition-all ${getFieldError(row.machineName, "machineName")
+                                  ? "border-yellow-400 bg-red-50 text-yellow-600"
+                                  : "border-slate-100 bg-white text-slate-600 focus:ring-1 focus:ring-blue-500"
+                                  }`}
+                              />
+                              {getFieldError(row.machineName, "machineName") && (
+                                <span className="text-[11px] text-yellow-500 font-bold ml-1">
+                                  {getFieldError(row.machineName, "machineName")}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <input
+                                defaultValue={row.maintenanceDescription}
+                                onChange={(e) => updateField(index, 'maintenanceDescription', e.target.value)}
                                 className="w-full p-2 border border-slate-100 rounded bg-transparent outline-none focus:ring-1 focus:ring-blue-500"
                               />
                             </td>
                             <td className="p-3">
                               <input
                                 defaultValue={row.frequency}
-                                className="w-full p-2 border border-slate-100 rounded bg-white outline-none focus:ring-1 focus:ring-blue-500 font-medium text-slate-600"
+                                onChange={(e) => updateField(index, 'frequency', e.target.value)}
+                                className={`w-full p-2 border rounded font-medium outline-none transition-all ${getFieldError(row.frequency, "frequency")
+                                  ? "border-yellow-400 bg-red-50 text-yellow-600"
+                                  : "border-slate-100 bg-white text-slate-600 focus:ring-1 focus:ring-blue-500"
+                                  }`}
                               />
+                              {getFieldError(row.frequency, "frequency") && (
+                                <span className="text-[11px] text-yellow-500 font-bold ml-1">
+                                  {getFieldError(row.frequency, "frequency")}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <div className="flex items-center justify-center gap-2">
+                                {/* ปุ่มเพิ่มแถว */}
+                                <button
+                                  onClick={() => addRow(index)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                  title="เพิ่มแถวใต้แถวนี้"
+                                >
+                                  <Plus size={16} />
+                                </button>
+
+                                {/* ปุ่มลบแถว */}
+                                <button
+                                  onClick={() => deleteRow(row.id)}
+                                  className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg transition-colors"
+                                  title="ลบแถวนี้"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}

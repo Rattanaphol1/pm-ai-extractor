@@ -14,16 +14,23 @@ export async function extractDataFromAI(payload: string, mode: 'text' | 'image')
     if (mode === 'text') {
       // --- สำหรับไฟล์ CSV / Excel ใช้ Llama 3.3 70B (ตัวท็อปด้านข้อความ) ---
       const completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.3-70b-versatile", //
         messages: [
           {
             role: "system",
-            content: "Extract PM data from CSV and return ONLY a JSON Array with fields: machineCode, machineName, maintenanceDescription, frequency. Use raw frequency values."
+            content: `You are a strict data extraction expert for Preventive Maintenance. 
+      Analyze the CSV and return a JSON Array.
+
+      STRICT RULES:
+      1. ONLY extract data that explicitly exists in the current row.
+      2. If 'maintenanceDescription' is empty or blank in the CSV, return it as exactly "" (empty string). 
+      3. DO NOT grab text from other columns or rows to fill empty fields.
+      4. Required fields: machineCode, machineName, maintenanceDescription, frequency.`
           },
           { role: "user", content: payload }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.1,
+        temperature: 0, // ปรับเป็น 0 เพื่อลดความคิดสร้างสรรค์ของ AI และเน้นความแม่นยำ
       });
 
       const result = JSON.parse(completion.choices[0].message.content || "{}");
@@ -41,18 +48,18 @@ export async function extractDataFromAI(payload: string, mode: 'text' | 'image')
       // --- สำหรับรูปภาพ ใช้ Llama 3.2 90B Vision (ตัวปัจจุบันที่อ่านรูปเก่งที่สุดของ Groq) ---
       // ใน actions.ts ส่วนของ mode === 'image'
       const completion = await groq.chat.completions.create({
-        model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+        model: "meta-llama/llama-4-maverick-17b-128e-instruct", //
         messages: [
           {
             role: "user",
             content: [
               {
                 type: "text",
-                text: `You are a data extraction expert. 
-          1. Extract EVERY SINGLE ROW found in the image table. Do not skip any items.
-          2. Capture both THAI and ENGLISH text exactly as shown (e.g., "Filling 1 (1 Kg.) เครื่องบรรจุนมกระป๋อง 1").
-          3. Return the result as a JSON Array named 'data'.
-          Fields: machineCode, machineName, maintenanceDescription, frequency.`
+                text: `You are a professional data extractor. 
+          1. Extract EVERY row from this table image precisely IN THE ORIGINAL ORDER (from Top to Bottom).
+          2. Follow the sequence of the 'Item' column strictly.
+          3. ROW SPLITTING: If MUAH-0001 has multiple maintenance tasks (e.g., Cleaning and Grease up), keep them adjacent and in the order they appear in the cell.
+          4. Return a JSON Array named 'data' containing: machineCode, machineName, maintenanceDescription, frequency.`
               },
               {
                 type: "image_url",
@@ -62,7 +69,7 @@ export async function extractDataFromAI(payload: string, mode: 'text' | 'image')
           },
         ],
         response_format: { type: "json_object" },
-        temperature: 0, // ปรับเป็น 0 เพื่อให้ AI มีความแม่นยำสูงสุด ไม่เดาข้อมูล
+        temperature: 0, //
       });
 
       const result = JSON.parse(completion.choices[0].message.content || "{}");
